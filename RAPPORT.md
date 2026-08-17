@@ -208,4 +208,43 @@ Rappel / précision (duration_seconds → duree_s comme feature) :
 
 Aucune ligne perdue (88 679 avant, 88 679 après).
 
+## Phase 12 : la ville et l'heure
+
+- Villes distinctes dans la transmission : 22 018, dont 14 177 (64 %) qui n'apparaissent qu'une
+  seule fois.
+- Règle ville : gardée en catégorie si vue au moins 20 fois **dans l'apprentissage seul** (appris
+  au `.fit()`, jamais avant) — 550 villes gardées, tout le reste devient "autre".
+- Colonnes du tableau : 108 (sans ville/heure) → 659 (avec). Loin des 22 018 qu'un one-hot naïf
+  sur city aurait coûté.
+- Heure encodée en sin/cos plutôt qu'un simple 0-23 : distance encodée 23h↔0h = 0,261, 23h↔20h =
+  0,765 — 23h est bien plus proche de minuit que de 20h, comme dans le ciel.
+- Formes : 29 → 27 après fusion de deux paires de la même forme sous deux graphies :
+  `changed`→`changing` (typo évidente, 1 occurrence) et `round`→`circle` (2 occurrences, jugement
+  plus discutable mais les deux ne pèsent presque rien sur le modèle).
+
+Rappel / précision (avec ville + heure + formes fusionnées) :
+- Rappel : 54,1 → 48,9 / 100
+- Précision : 1,1 → 1,2 / 100
+
+Le rappel baisse un peu, la précision monte un peu : le modèle devient plus prudent — sans doute
+parce que 550 villes fraîchement encodées ajoutent du bruit sur un jeu encore minuscule de vrais
+canulars (moins de 700 dans l'apprentissage). Pas une régression franche, plutôt un signal que ce
+modèle-ci a besoin de plus de canulars pour vraiment apprendre quelque chose de la ville.
+
+# Résumé : comment les deux nombres ont bougé
+
+| Étape | Rappel | Précision | Ce qui a changé |
+|---|---|---|---|
+| Phase 4 (avec comments, découpe aléatoire) | 99,4 | 99,4 | Le chiffre trichait : comments contient le mot qui a servi à fabriquer l'étiquette |
+| Phase 5 (comments retiré) | 50,6 | 1,1 | Fuite corrigée : chiffre honnête, mais nettement moins impressionnant |
+| Phase 7 (découpe groupée par événement) | 51,9 | 1,1 | Corrige la fuite d'un même événement partagé entre train et test — bouge à peine ici |
+| Phase 8 (découpe chronologique) | 51,9 | 1,1 | Même modèle, découpe dans l'ordre du temps plutôt qu'au hasard |
+| Phase 10 (pipeline sans fuite de calcul) | 53,3 | 1,1 | Médiane/catégories apprises sur l'apprentissage seul, pas tout le tableau |
+| Phase 11 (duree_s au lieu de duration_seconds) | 54,1 | 1,1 | Récupère ~4 000 durées que la colonne "propre" avait mises à 0 |
+| Phase 12 (ville + heure + formes fusionnées) | 48,9 | 1,2 | Plus de features, modèle plus prudent : rappel en baisse, précision en hausse |
+
+Le chiffre de la phase 4 (99,4/99,4) était une fuite de bout en bout. Le chiffre honnête tourne
+autour de 50/1 : on attrape environ un canular sur deux, au prix de beaucoup de fausses alertes —
+logique avec une cible fabriquée à partir d'un mot-clé dans un texte qu'on a retiré du modèle.
+
 

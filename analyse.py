@@ -14,6 +14,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 
@@ -606,6 +607,130 @@ def phase11_combien_de_temps_ca_a_dure(df, idx_train, idx_test):
     return df
 
 
+class RegroupeurVillesRares(BaseEstimator, TransformerMixin):
+    """Ne garde en catégorie propre que les villes vues au moins `seuil` fois
+    dans l'apprentissage ; tout le reste (et toute ville jamais vue) devient
+    'autre'. La liste des villes gardées n'est apprise qu'au .fit()."""
+
+    def __init__(self, seuil=20):
+        self.seuil = seuil
+
+    def fit(self, X, y=None):
+        comptes = pd.Series(np.ravel(X)).value_counts()
+        self.villes_frequentes_ = set(comptes[comptes >= self.seuil].index)
+        return self
+
+    def transform(self, X):
+        s = pd.Series(np.ravel(X))
+        s = s.where(s.isin(self.villes_frequentes_), "autre")
+        return s.to_numpy().reshape(-1, 1)
+
+
+class EncodeurHeureCyclique(BaseEstimator, TransformerMixin):
+    """23h et 0h sont voisines dans le ciel ; sin/cos le disent au modèle,
+    une seule colonne 0-23 ne le pouvait pas. Rien n'est appris des données."""
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        heures = pd.to_datetime(pd.Series(np.ravel(X))).dt.hour.to_numpy()
+        radians = 2 * np.pi * heures / 24
+        return np.column_stack([np.sin(radians), np.cos(radians)])
+
+
+FUSIONS_FORMES = {"changed": "changing", "round": "circle"}
+
+
+def _fusionner_formes(X):
+    return X.replace(FUSIONS_FORMES)
+
+
+def construire_pipeline_v2(seuil_villes=20):
+    """Comme construire_pipeline, avec en plus la ville (regroupée, apprise
+    sur train seul) et l'heure (encodage cyclique)."""
+    pipeline_ville = Pipeline(
+        [
+            ("regroupeur", RegroupeurVillesRares(seuil=seuil_villes)),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+    pipeline_forme = Pipeline(
+        [
+            ("fusion", FunctionTransformer(_fusionner_formes)),
+            ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+            ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+    pipeline_cat = Pipeline(
+        [
+            ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+            ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    pretraitement = ColumnTransformer(
+        [
+            ("ville", pipeline_ville, ["city"]),
+            ("forme", pipeline_forme, ["shape"]),
+            ("cat", pipeline_cat, ["state", "country"]),
+            ("heure", EncodeurHeureCyclique(), ["datetime"]),
+            ("num", SimpleImputer(strategy="median"), ["duree_s", "latitude", "longitude"]),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("pretraitement", pretraitement),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
+        ]
+    )
+
+
+def phase12_la_ville_et_lheure(df, idx_train, idx_test):
+    print("\n=== Phase 12 : la ville et l'heure ===")
+
+    n_villes_uniques = int((df["city"].value_counts() == 1).sum())
+    print(f"Villes n'apparaissant qu'une fois dans toute la transmission : {n_villes_uniques}")
+
+    colonnes_avant = ["shape", "state", "country", "duree_s", "latitude", "longitude"]
+    pipeline_avant = construire_pipeline(COLONNES_CAT_HONNETES, ["duree_s", "latitude", "longitude"], None)
+    pipeline_avant.fit(df.loc[idx_train, colonnes_avant], df.loc[idx_train, "canular"])
+    largeur_avant = pipeline_avant.named_steps["pretraitement"].transform(df.loc[idx_test, colonnes_avant]).shape[1]
+
+    pipeline_v2 = construire_pipeline_v2(seuil_villes=20)
+    colonnes_v2 = ["city", "shape", "state", "country", "datetime", "duree_s", "latitude", "longitude"]
+    pipeline_v2.fit(df.loc[idx_train, colonnes_v2], df.loc[idx_train, "canular"])
+    largeur_apres = pipeline_v2.named_steps["pretraitement"].transform(df.loc[idx_test, colonnes_v2]).shape[1]
+
+    n_villes_gardees = len(pipeline_v2.named_steps["pretraitement"].named_transformers_["ville"].named_steps["regroupeur"].villes_frequentes_)
+
+    print(f"Colonnes du tableau : {largeur_avant} (sans ville/heure) → {largeur_apres} (avec)")
+    print(f"Règle ville : gardée si vue ≥ 20 fois dans l'apprentissage ({n_villes_gardees} villes gardées), sinon 'autre'.")
+
+    def point_heure(h):
+        r = 2 * np.pi * h / 24
+        return np.array([np.sin(r), np.cos(r)])
+
+    d_23_0 = np.linalg.norm(point_heure(23) - point_heure(0))
+    d_23_20 = np.linalg.norm(point_heure(23) - point_heure(20))
+    print(f"Distance encodée 23h↔0h : {d_23_0:.3f}  —  23h↔20h : {d_23_20:.3f}")
+
+    formes_avant = set(df["shape"]) - {""}
+    formes_apres = {FUSIONS_FORMES.get(f, f) for f in formes_avant}
+    print(f"Formes : {len(formes_avant)} → {len(formes_apres)} après fusion ({FUSIONS_FORMES})")
+
+    y_pred = pipeline_v2.predict(df.loc[idx_test, colonnes_v2])
+    y_test = df.loc[idx_test, "canular"]
+    rappel = recall_score(y_test, y_pred, zero_division=0)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    print(f"Rappel : {100 * rappel:.1f} / 100  —  Précision : {100 * precision:.1f} / 100")
+
+    return df, pipeline_v2
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -619,3 +744,4 @@ if __name__ == "__main__":
     df = phase9_les_cases_vides(df)
     df, pipeline = phase10_chaine_de_traitement(df, idx_train, idx_test)
     df = phase11_combien_de_temps_ca_a_dure(df, idx_train, idx_test)
+    df, pipeline = phase12_la_ville_et_lheure(df, idx_train, idx_test)
