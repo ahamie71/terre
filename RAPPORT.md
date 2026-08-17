@@ -15,4 +15,18 @@ commentaire, qui décale tout le reste. Ça ne tombe pas toujours au même endro
 donc impossible de deviner comment recoller les champs sans risquer de mettre une ville dans la
 colonne pays. Je les mets de côté pour l'instant.
 
+## Phase 2 : rien n'est du bon type
+
+Conversion en nombres (duration_seconds, latitude, longitude) et en dates (datetime, date_posted).
+Aucune ligne supprimée, les valeurs qui résistent deviennent `None`.
+
+- duration_seconds : 5 échecs (2 vides, 3 avec un backtick collé, ex `2\``) — bug du service qui
+  convertit le texte libre du témoin en secondes.
+- latitude : 1 échec, `33q.200088` — une lettre parasite qui suffit à casser toute la colonne.
+  Vient du géocodage/transmission.
+- longitude : 0 échec.
+- datetime : 1220 échecs, tous en `... 24:00` (ex `10/10/2005 24:00`) — heure invalide, bug du
+  service de standardisation, pas le témoin.
+- date_posted : 0 échec.
+
 

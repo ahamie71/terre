@@ -3,6 +3,7 @@
 import csv
 import os
 import urllib.request
+from datetime import datetime
 
 DATA_URL = (
     "https://raw.githubusercontent.com/planetsig/ufo-reports/master/"
@@ -59,6 +60,60 @@ def phase1_ouvrir_la_caisse():
     return lignes_valides, lignes_ecartees
 
 
+def convertir_nombre(releves, champ):
+    """Convertit champ en float sur place. Ne supprime aucune ligne : les
+    valeurs qui résistent deviennent None. Retourne (nb_echecs, exemples)."""
+    exemples = []
+    nb_echecs = 0
+    for r in releves:
+        brut = r[champ]
+        try:
+            r[champ] = float(brut)
+        except ValueError:
+            nb_echecs += 1
+            if len(exemples) < 5:
+                exemples.append(brut)
+            r[champ] = None
+    return nb_echecs, exemples
+
+
+def convertir_date(releves, champ, fmt):
+    """Convertit champ en datetime sur place, même logique que convertir_nombre."""
+    exemples = []
+    nb_echecs = 0
+    for r in releves:
+        brut = r[champ]
+        try:
+            r[champ] = datetime.strptime(brut, fmt)
+        except ValueError:
+            nb_echecs += 1
+            if len(exemples) < 5:
+                exemples.append(brut)
+            r[champ] = None
+    return nb_echecs, exemples
+
+
+def phase2_rien_nest_du_bon_type(lignes_valides):
+    print("\n=== Phase 2 : rien n'est du bon type ===")
+
+    releves = [dict(zip(COLONNES, l)) for l in lignes_valides]
+
+    conversions = [
+        ("duration_seconds", convertir_nombre, ()),
+        ("latitude", convertir_nombre, ()),
+        ("longitude", convertir_nombre, ()),
+        ("datetime", convertir_date, ("%m/%d/%Y %H:%M",)),
+        ("date_posted", convertir_date, ("%m/%d/%Y",)),
+    ]
+
+    for champ, fonction, args in conversions:
+        nb_echecs, exemples = fonction(releves, champ, *args)
+        print(f"{champ}: {nb_echecs} valeur(s) non convertie(s) — exemples : {exemples}")
+
+    return releves
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
+    releves = phase2_rien_nest_du_bon_type(lignes_valides)
