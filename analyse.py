@@ -155,7 +155,8 @@ def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_s
     for c in colonnes_num:
         X[c] = X[c].fillna(X[c].median())
     for c in colonnes_cat:
-        X[c] = X[c].fillna("inconnu")
+        # les trous de ces colonnes sont des chaînes vides dans le fichier, pas des NaN
+        X[c] = X[c].replace("", "inconnu").fillna("inconnu")
     if colonne_texte:
         X[colonne_texte] = X[colonne_texte].fillna("")
     y = df["canular"]
@@ -372,6 +373,38 @@ def phase8_ordre_des_choses(df):
     return df, (idx_train, idx_test)
 
 
+def est_troue(df, colonne):
+    return df[colonne].isna() | (df[colonne] == "")
+
+
+def phase9_les_cases_vides(df):
+    print("\n=== Phase 9 : les cases vides ===")
+
+    trous = {c: est_troue(df, c).sum() for c in df.columns if c not in ("canular",)}
+    trois_plus_trouees = sorted(trous, key=trous.get, reverse=True)[:3]
+    print(f"Trois colonnes les plus trouées : {trois_plus_trouees}")
+
+    for col in trois_plus_trouees:
+        t = est_troue(df, col)
+        p_troue = 100 * df.loc[t, "canular"].mean()
+        p_plein = 100 * df.loc[~t, "canular"].mean()
+        print(
+            f"  {col} : {t.sum()} trous — canular si troué {p_troue:.2f} % "
+            f"vs canular si rempli {p_plein:.2f} %"
+        )
+
+    print(
+        "Traitement retenu : les trous des colonnes catégorielles (country, state) partent "
+        "dans leur propre catégorie 'inconnu' plutôt que d'être fondus dans une valeur "
+        "existante — le one-hot lui donne sa colonne à elle, donc le modèle voit toujours "
+        "qu'il y avait un trou à cet endroit, et peut apprendre que ça corrèle avec canular. "
+        "duration_hours_min n'est pas encore une feature du modèle ; le même principe "
+        "s'appliquera quand on la travaillera en phase 11."
+    )
+
+    return df
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -382,3 +415,4 @@ if __name__ == "__main__":
     phase6_le_modele_le_plus_bete(df, apres)
     df, (idx_train, idx_test) = phase7_plusieurs_temoins_un_seul_evenement(df)
     df, (idx_train, idx_test) = phase8_ordre_des_choses(df)
+    df = phase9_les_cases_vides(df)

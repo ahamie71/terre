@@ -134,4 +134,26 @@ moins selon les années — c'est que les éditeurs NUFORC ont annoté plus ou m
 "possible hoax" selon les périodes. Notre étiquette de la phase 3 porte la trace des habitudes du
 Bureau, pas seulement des faits.
 
+## Phase 9 : les cases vides
+
+Trois colonnes les plus trouées, canular selon trou ou pas :
+
+| Colonne | Trous | % canular si troué | % canular si rempli |
+|---|---|---|---|
+| country | 12 365 | 1,16 % | 0,86 % |
+| state | 7 409 | 1,30 % | 0,87 % |
+| duration_hours_min | 3 017 | 2,35 % | 0,85 % |
+
+Dans les trois cas, un trou est associé à plus de canulars que la moyenne (jusqu'à x2,8 pour
+duration_hours_min). Le trou porte de l'info, donc pas question de le boucher sans laisser de
+trace.
+
+Traitement retenu : les trous de country et state (déjà utilisées par le modèle) partent dans leur
+propre catégorie "inconnu" plutôt que d'être fondus avec une valeur existante — corrigé au passage
+un bug silencieux où mon `fillna` ne visait que les `NaN` alors que ces trous sont des chaînes
+vides dans le fichier, donc il ne faisait rien. Le one-hot donne sa colonne à "inconnu", le modèle
+peut donc toujours distinguer un trou d'une vraie valeur et apprendre la corrélation avec canular.
+duration_hours_min n'est pas encore une feature ; même principe prévu quand elle sera traitée en
+phase 11.
+
 
