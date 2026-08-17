@@ -488,6 +488,124 @@ def phase10_chaine_de_traitement(df, idx_train, idx_test):
     return df, pipeline
 
 
+PLAFOND_DUREE_S = 365 * 86400  # au-delà, une durée n'est plus crédible pour une observation
+
+
+def _en_secondes(valeur, unite):
+    if unite.startswith("sec"):
+        return valeur
+    if unite.startswith("min"):
+        return valeur * 60
+    if unite.startswith("hour") or unite.startswith("hr") or unite == "h":
+        return valeur * 3600
+    if unite.startswith("day"):
+        return valeur * 86400
+    if unite.startswith("week"):
+        return valeur * 604800
+    return None
+
+
+def parser_duree_texte(texte):
+    """Essaie de lire une durée dans le texte libre du témoin (duration_hours_min)
+    et la rend en secondes. Rend None si rien de reconnaissable."""
+    if not texte:
+        return None
+    t = texte.strip().lower()
+
+    m = re.fullmatch(r"(\d{1,2}):(\d{2}):(\d{2})", t)
+    if m:
+        h, mi, s = map(int, m.groups())
+        return h * 3600 + mi * 60 + s
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", t)
+    if m:
+        mi, s = map(int, m.groups())
+        return mi * 60 + s
+
+    m = re.search(r"(\d+)\s*min\w*\.?\s*(\d+)\s*sec", t)
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+
+    m = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+        t,
+    )
+    if m:
+        a, b, unite = float(m.group(1)), float(m.group(2)), m.group(3)
+        return _en_secondes((a + b) / 2, unite)
+
+    m = re.search(r"(\d+)\s*/\s*(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b", t)
+    if m:
+        a, b, unite = m.groups()
+        return _en_secondes(float(a) / float(b), unite)
+
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|s\b|minutes?|mins?|m\b|hours?|hrs?|h\b|days?|weeks?)", t)
+    if m:
+        return _en_secondes(float(m.group(1)), m.group(2))
+
+    return None
+
+
+def reconcilier_duree(df):
+    df["duree_texte"] = df["duration_hours_min"].apply(parser_duree_texte)
+
+    d_sec = df["duration_seconds"]
+    plausible = d_sec.where(d_sec.isna() | (d_sec <= PLAFOND_DUREE_S))
+    n_implausible = int((d_sec.notna() & (d_sec > PLAFOND_DUREE_S)).sum())
+
+    contradictions = (
+        d_sec.notna()
+        & (d_sec != 0)
+        & (d_sec <= PLAFOND_DUREE_S)
+        & df["duree_texte"].notna()
+        & ((d_sec / df["duree_texte"] > 3) | (df["duree_texte"] / d_sec > 3))
+    )
+
+    duree_finale = plausible.where(plausible.notna() & (plausible != 0), df["duree_texte"])
+    duree_finale = duree_finale.where(duree_finale.isna() | (duree_finale <= PLAFOND_DUREE_S))
+    df["duree_s"] = duree_finale
+
+    return n_implausible, int(contradictions.sum()), contradictions
+
+
+def phase11_combien_de_temps_ca_a_dure(df, idx_train, idx_test):
+    print("\n=== Phase 11 : combien de temps ça a duré ===")
+
+    top3_avant = df["duration_seconds"].sort_values(ascending=False).head(3)
+    print("Trois durées les plus longues, telles quelles :")
+    print(df.loc[top3_avant.index, ["duration_seconds", "duration_hours_min"]].to_string())
+
+    n_implausible, n_contradictions, contradictions = reconcilier_duree(df)
+
+    print(
+        f"\n{n_implausible} valeurs de duration_seconds au-delà d'un an (ex. « 31 years », "
+        f"« 23000hrs ») jugées pas crédibles pour une observation — mises de côté plutôt que "
+        f"gardées telles quelles (ça se voit tout de suite dans la médiane si on les garde)."
+    )
+    print(f"Colonnes qui se contredisent (facteur > 3 entre les deux) : {n_contradictions}")
+
+    n_inutilisable = int(df["duree_s"].isna().sum())
+    print(f"Relevés dont la durée reste inutilisable après traitement : {n_inutilisable}")
+    print(f"Durée médiane : {df['duree_s'].median():.0f} s")
+    print(f"Relevés annonçant plus d'une journée d'observation : {int((df['duree_s'] > 86400).sum())}")
+
+    exemple = df[contradictions].iloc[0]
+    print("\nExemple, les deux colonnes racontent deux histoires différentes :")
+    print(exemple[["datetime", "city", "duration_seconds", "duration_hours_min", "duree_s"]].to_string())
+
+    print(f"\nLignes avant : {len(df)} — lignes après : {len(df)} (aucune perdue)")
+
+    _, rappel_avant, precision_avant, _, _ = entrainer_pipeline(
+        df, COLONNES_CAT_HONNETES, ["duration_seconds", "latitude", "longitude"], None, idx_train, idx_test
+    )
+    _, rappel_apres, precision_apres, _, _ = entrainer_pipeline(
+        df, COLONNES_CAT_HONNETES, ["duree_s", "latitude", "longitude"], None, idx_train, idx_test
+    )
+    print(f"\nRappel    : {100 * rappel_avant:.1f} → {100 * rappel_apres:.1f} / 100 (duration_seconds → duree_s)")
+    print(f"Précision : {100 * precision_avant:.1f} → {100 * precision_apres:.1f} / 100")
+
+    return df
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -500,3 +618,4 @@ if __name__ == "__main__":
     df, (idx_train, idx_test) = phase8_ordre_des_choses(df)
     df = phase9_les_cases_vides(df)
     df, pipeline = phase10_chaine_de_traitement(df, idx_train, idx_test)
+    df = phase11_combien_de_temps_ca_a_dure(df, idx_train, idx_test)

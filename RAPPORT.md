@@ -181,4 +181,31 @@ Démonstration : un relevé inventé à la main (`shape=triangle, state=il, coun
 duration_seconds=300, latitude=41.57, longitude=-87.78`) traverse toute la chaîne en un seul appel
 `pipeline.predict(...)` et ressort avec une prédiction, sans retaper une étape à la main.
 
+## Phase 11 : combien de temps ça a duré
+
+Trois durées les plus longues telles quelles dans duration_seconds : 31 ans, 23000hrs (~2,6 ans),
+21 ans. Clairement pas des durées d'observation. Décision : au-delà d'un an, une valeur de
+duration_seconds n'est plus crédible — 6 relevés dans ce cas, mis de côté plutôt que gardés (sinon
+ils écrasent silencieusement toute médiane calculée dessus).
+
+Reconstruction d'une durée utilisable (`duree_s`) : je fais confiance à duration_seconds quand il
+est non nul et crédible (≤ 1 an) ; sinon j'essaie de lire duration_hours_min (regex sur secondes/
+minutes/heures/jours, plages "X-Y unité", horloge "mm:ss") ; sinon la durée reste inutilisable.
+
+- Relevés dont la durée reste inutilisable après traitement : 7 022 (sur 88 679)
+- Colonnes qui se contredisent (facteur > 3 entre les deux) : 734
+- Durée médiane : 180 s (3 minutes)
+- Relevés annonçant plus d'une journée d'observation : 187
+
+Exemple de contradiction : le 10/10/1956 à Edna, `duration_seconds` dit 20 secondes,
+`duration_hours_min` dit "1/2 hour" (1800 s) — écart x90. Je garde `duration_seconds` par défaut
+dans ce cas (règle : je ne fais confiance au texte que si le nombre est absent ou à 0), donc cette
+ligne précise reste probablement fausse ; c'est une limite connue, pas cachée.
+
+Rappel / précision (duration_seconds → duree_s comme feature) :
+- Rappel : 53,3 → 54,1 / 100
+- Précision : 1,1 → 1,1 / 100
+
+Aucune ligne perdue (88 679 avant, 88 679 après).
+
 
