@@ -111,4 +111,27 @@ reste (shape, state, country, duration, lat/long) ne permet pas de "reconnaître
 cœur de la même manière — un témoin de Tinley Park et un autre écrivent des durées et des formes
 différentes même pour le même objet dans le ciel.
 
+## Phase 8 : l'ordre des choses
+
+Coupure sur `datetime` (l'instant où le témoin lève les yeux), pas `date_posted` (quand le Bureau
+reçoit/traite le dossier) : 8836 relevés ont plus de 10 ans d'écart entre les deux (jusqu'à
+96 ans), donc `date_posted` mélangerait des dossiers anciens traités tard avec des dossiers
+récents. Seul `datetime` respecte l'ordre réel des événements.
+
+Découpe par événement (jour+ville+state de la phase 7, pas la fusion par témoignage recopié —
+ces doublons peuvent être à des décennies d'écart et casseraient l'ordre chronologique ; sans
+conséquence puisque comments est déjà hors du modèle).
+
+- Date de coupure : 11 janvier 2012 (apprentissage = avant, test = à partir de là)
+- Relevés : 70 944 en apprentissage, 17 735 en test
+- Proportion de canulars — apprentissage : 0,94 % | test : 0,76 %
+- Rappel : 51,9 / 100 — Précision : 1,1 / 100
+
+Les deux proportions ne sont pas égales, et ça raconte quelque chose : le taux de canulars (tel
+qu'on le mesure, via les notes NUFORC) grimpe fort entre 2005 et 2008 (jusqu'à 2,5 %/an) puis
+redescend vers 2012-2013 (~0,5-0,6 %). Ce n'est probablement pas que les gens mentent plus ou
+moins selon les années — c'est que les éditeurs NUFORC ont annoté plus ou moins activement
+"possible hoax" selon les périodes. Notre étiquette de la phase 3 porte la trace des habitudes du
+Bureau, pas seulement des faits.
+
 

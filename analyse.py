@@ -326,6 +326,52 @@ def phase7_plusieurs_temoins_un_seul_evenement(df):
     return df, (idx_train, idx_test)
 
 
+def phase8_ordre_des_choses(df):
+    print("\n=== Phase 8 : l'ordre des choses ===")
+
+    print(
+        "Coupure sur datetime (l'instant où le témoin lève les yeux), pas date_posted "
+        "(quand le Bureau reçoit/traite le dossier) : 8836 relevés ont plus de 10 ans "
+        "d'écart entre les deux, donc date_posted mélangerait des vieux dossiers traités "
+        "tard avec des dossiers récents traités vite. datetime seul respecte l'ordre réel."
+    )
+
+    # on regroupe par événement (jour+ville+state, phase 7) pour ne pas couper un
+    # événement en deux, mais PAS par témoignage recopié : ces doublons peuvent être
+    # à des décennies d'écart et casseraient l'ordre chronologique. Sans conséquence
+    # ici puisque comments est déjà hors du modèle depuis la phase 5.
+    date_du_groupe = df.groupby("groupe_evenement")["datetime"].min().sort_values()
+    taille_du_groupe = df["groupe_evenement"].value_counts()
+
+    objectif_train = 0.8 * len(df)
+    cumul = 0
+    groupes_train = []
+    for g in date_du_groupe.index:
+        if cumul >= objectif_train:
+            break
+        groupes_train.append(g)
+        cumul += taille_du_groupe[g]
+    groupes_train = set(groupes_train)
+
+    idx_train = df.index[df["groupe_evenement"].isin(groupes_train)]
+    idx_test = df.index[~df["groupe_evenement"].isin(groupes_train)]
+
+    date_coupure = df.loc[idx_train, "datetime"].max()
+    proportion_train = 100 * df.loc[idx_train, "canular"].mean()
+    proportion_test = 100 * df.loc[idx_test, "canular"].mean()
+
+    print(f"Date de coupure : {date_coupure.date()} (train = avant, test = à partir de là)")
+    print(f"Relevés : {len(idx_train)} en apprentissage, {len(idx_test)} en test")
+    print(f"Proportion de canulars — train : {proportion_train:.2f} % | test : {proportion_test:.2f} %")
+
+    _, rappel, precision, _ = entrainer_et_evaluer(
+        df, COLONNES_CAT_HONNETES, COLONNES_NUM_HONNETES, None, decoupe=(idx_train, idx_test)
+    )
+    print(f"Rappel : {100 * rappel:.1f} / 100  —  Précision : {100 * precision:.1f} / 100")
+
+    return df, (idx_train, idx_test)
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -335,3 +381,4 @@ if __name__ == "__main__":
     avant, apres = phase5_le_conseil_ne_vous_croit_pas(df)
     phase6_le_modele_le_plus_bete(df, apres)
     df, (idx_train, idx_test) = phase7_plusieurs_temoins_un_seul_evenement(df)
+    df, (idx_train, idx_test) = phase8_ordre_des_choses(df)
