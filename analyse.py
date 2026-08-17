@@ -10,7 +10,7 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_score, recall_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -140,8 +140,8 @@ def phase3_trier_les_canulars(releves):
 
 def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_state=42):
     """Entraîne une régression logistique sur les colonnes données et rend
-    (nb de relevés de test, rappel, précision), calculés sur un jeu de test
-    jamais vu à l'entraînement."""
+    (nb de relevés de test, rappel, précision, exactitude), calculés sur un
+    jeu de test jamais vu à l'entraînement."""
     colonnes = colonnes_cat + colonnes_num + ([colonne_texte] if colonne_texte else [])
     X = df[colonnes].copy()
     for c in colonnes_num:
@@ -165,7 +165,7 @@ def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_s
     modele = Pipeline(
         [
             ("pretraitement", ColumnTransformer(transformateurs, remainder="passthrough")),
-            ("classifieur", LogisticRegression(max_iter=3000, class_weight="balanced")),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
         ]
     )
     modele.fit(X_train, y_train)
@@ -173,7 +173,8 @@ def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_s
 
     rappel = recall_score(y_test, y_pred, zero_division=0)
     precision = precision_score(y_test, y_pred, zero_division=0)
-    return len(X_test), rappel, precision
+    exactitude = accuracy_score(y_test, y_pred)
+    return len(X_test), rappel, precision, exactitude
 
 
 def phase4_premier_verdict(releves):
@@ -184,7 +185,7 @@ def phase4_premier_verdict(releves):
     colonnes_num = ["duration_seconds", "latitude", "longitude"]
     colonne_texte = "comments"
 
-    n_test, rappel, precision = entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte)
+    n_test, rappel, precision, _ = entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte)
 
     print(f"Évalué sur {n_test} relevés jamais vus à l'entraînement (20 % du jeu, stratifié).")
     print(f"Rappel    : {100 * rappel:.1f} / 100 canulars réellement présents attrapés")
@@ -193,9 +194,44 @@ def phase4_premier_verdict(releves):
     return df
 
 
+def phase5_le_conseil_ne_vous_croit_pas(df):
+    print("\n=== Phase 5 : le Conseil ne vous croit pas ===")
+
+    avant = entrainer_et_evaluer(
+        df, ["shape", "state", "country"], ["duration_seconds", "latitude", "longitude"], "comments"
+    )
+
+    apres = entrainer_et_evaluer(
+        df, ["shape", "state", "country"], ["duration_seconds", "latitude", "longitude"], None
+    )
+
+    print("Avant (avec comments) :")
+    print(f"  Rappel    : {100 * avant[1]:.1f} / 100")
+    print(f"  Précision : {100 * avant[2]:.1f} / 100")
+    print("Après (sans comments) :")
+    print(f"  Rappel    : {100 * apres[1]:.1f} / 100")
+    print(f"  Précision : {100 * apres[2]:.1f} / 100")
+
+    return avant, apres
+
+
+def phase6_le_modele_le_plus_bete(df, apres):
+    print("\n=== Phase 6 : le modèle le plus bête du Bureau ===")
+
+    y = df["canular"]
+    _, y_test = train_test_split(y, test_size=0.2, random_state=42, stratify=y)
+    exactitude_stagiaire = accuracy_score(y_test, [False] * len(y_test))
+    exactitude_modele = apres[3]
+
+    print(f"Exactitude du stagiaire (toujours 'pas canular') : {100 * exactitude_stagiaire:.1f} %")
+    print(f"Exactitude de notre modèle (sans comments)        : {100 * exactitude_modele:.1f} %")
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
     releves = phase2_rien_nest_du_bon_type(lignes_valides)
     releves = phase3_trier_les_canulars(releves)
     df = phase4_premier_verdict(releves)
+    avant, apres = phase5_le_conseil_ne_vous_croit_pas(df)
+    phase6_le_modele_le_plus_bete(df, apres)
