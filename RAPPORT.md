@@ -83,4 +83,32 @@ rares (0,9 %) — prédire "non" tout le temps suffit à avoir raison presque to
 détecter. La mesure qui compte, c'est le rappel (et la précision) : c'est elle qui dit si le
 système attrape vraiment des canulars, ce que l'exactitude ne dit pas.
 
+# Le Conseil renvoie le rapport
+
+## Phase 7 : plusieurs témoins, un seul événement
+
+Un événement = même jour + même ville + même state (colonnes `datetime` tronqué au jour, `city`,
+`state`). Pour grouper par jour il fallait d'abord réparer les 1220 heures `24:00` laissées à
+`None` en phase 2 (24:00 = minuit le lendemain) — sans ça il manquait la date de 1220 lignes.
+
+- Événements avec plus d'un témoin : 2399
+- Le plus gros : 56 témoins, le 31 octobre 2004 à Tinley Park (IL)
+- Relevés à cheval sur les deux côtés dans la découpe d'hier (aléatoire) : 2051 — soit le modèle
+  apprenait une partie d'un événement et se faisait noter sur le reste du même événement.
+- Témoignages recopiés mot pour mot (≥40 caractères, pour ignorer les phrases courtes du genre
+  "Fireball" qui se répètent par coïncidence) : 139 lignes sur 62 textes distincts. Je les fonds
+  dans le même groupe que l'événement concerné, pour la même raison : qu'ils partent ensemble.
+
+Nouvelle découpe : tous les relevés d'un même groupe (événement + doublons fondus) partent du même
+côté (`GroupShuffleSplit`).
+
+Rappel / précision du modèle honnête (sans comments), avant → après cette découpe :
+- Rappel : 50,6 → 51,9 / 100
+- Précision : 1,1 → 1,1 / 100
+
+Ça bouge à peine. Logique : la vraie fuite grave (comments) est déjà partie en phase 5. Ce qui
+reste (shape, state, country, duration, lat/long) ne permet pas de "reconnaître" un événement par
+cœur de la même manière — un témoin de Tinley Park et un autre écrivent des durées et des formes
+différentes même pour le même objet dans le ciel.
+
 

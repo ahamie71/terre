@@ -6,12 +6,13 @@ import re
 import urllib.request
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
@@ -107,6 +108,8 @@ def phase2_rien_nest_du_bon_type(lignes_valides):
     print("\n=== Phase 2 : rien n'est du bon type ===")
 
     releves = [dict(zip(COLONNES, l)) for l in lignes_valides]
+    for r in releves:
+        r["_datetime_brut"] = r["datetime"]
 
     conversions = [
         ("duration_seconds", convertir_nombre, ()),
@@ -138,10 +141,15 @@ def phase3_trier_les_canulars(releves):
     return releves
 
 
-def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_state=42):
+def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_state=42, decoupe=None):
     """Entraîne une régression logistique sur les colonnes données et rend
     (nb de relevés de test, rappel, précision, exactitude), calculés sur un
-    jeu de test jamais vu à l'entraînement."""
+    jeu de test jamais vu à l'entraînement.
+
+    decoupe, si fourni, est un couple (idx_train, idx_test) tout fait — sinon
+    une découpe aléatoire stratifiée est utilisée. Attention : les moyennes/
+    médianes ci-dessous sont encore calculées sur tout df, pas juste sur
+    l'apprentissage — c'est la fuite que la phase 10 va corriger."""
     colonnes = colonnes_cat + colonnes_num + ([colonne_texte] if colonne_texte else [])
     X = df[colonnes].copy()
     for c in colonnes_num:
@@ -152,9 +160,14 @@ def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_s
         X[colonne_texte] = X[colonne_texte].fillna("")
     y = df["canular"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=random_state, stratify=y
-    )
+    if decoupe is not None:
+        idx_train, idx_test = decoupe
+        X_train, X_test = X.loc[idx_train], X.loc[idx_test]
+        y_train, y_test = y.loc[idx_train], y.loc[idx_test]
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=random_state, stratify=y
+        )
 
     transformateurs = [("cat", OneHotEncoder(handle_unknown="ignore"), colonnes_cat)]
     if colonne_texte:
@@ -227,6 +240,92 @@ def phase6_le_modele_le_plus_bete(df, apres):
     print(f"Exactitude de notre modèle (sans comments)        : {100 * exactitude_modele:.1f} %")
 
 
+COLONNES_CAT_HONNETES = ["shape", "state", "country"]
+COLONNES_NUM_HONNETES = ["duration_seconds", "latitude", "longitude"]
+
+
+def reparer_heure_24h(df):
+    """datetime garde 1220 valeurs à None depuis la phase 2 (heure '24:00',
+    invalide). On en a besoin ici pour grouper/trier par date, donc on les
+    répare : '24:00' = minuit le jour suivant. Ne change rien au compte déjà
+    publié en phase 2, juste une réparation ciblée sur ce même bug."""
+    manquants = df["datetime"].isna()
+    brut = df.loc[manquants, "_datetime_brut"]
+    jours = pd.to_datetime(brut.str.replace(" 24:00", "", regex=False), format="%m/%d/%Y")
+    df.loc[manquants, "datetime"] = jours + pd.Timedelta(days=1)
+    return int(manquants.sum())
+
+
+def phase7_plusieurs_temoins_un_seul_evenement(df):
+    print("\n=== Phase 7 : plusieurs témoins, un seul événement ===")
+
+    n_repares = reparer_heure_24h(df)
+    print(f"(heures '24:00' réparées pour pouvoir grouper par jour : {n_repares})")
+
+    df["jour"] = df["datetime"].dt.date
+    df["groupe_evenement"] = df.groupby(["jour", "city", "state"], dropna=False).ngroup()
+
+    tailles = df.groupby("groupe_evenement").size()
+    multi = tailles[tailles > 1]
+    gid_max = multi.idxmax()
+    plus_gros = df.loc[df["groupe_evenement"] == gid_max, ["jour", "city", "state"]].iloc[0]
+
+    print(f"Événements avec plus d'un témoin : {len(multi)}")
+    print(
+        f"Témoins pour le plus gros : {multi.max()} "
+        f"({plus_gros['jour']}, {plus_gros['city']}, {plus_gros['state']})"
+    )
+
+    idx_train_hier, idx_test_hier = train_test_split(
+        df.index, test_size=0.2, random_state=42, stratify=df["canular"]
+    )
+    train_set, test_set = set(idx_train_hier), set(idx_test_hier)
+    a_cheval = sum(
+        len(idxs)
+        for _, sous in df.groupby("groupe_evenement")
+        for idxs in [set(sous.index)]
+        if idxs & train_set and idxs & test_set
+    )
+    print(f"Relevés à cheval sur les deux côtés dans la découpe d'hier : {a_cheval}")
+
+    # témoignages recopiés mot pour mot (on ignore les textes très courts,
+    # trop génériques — "Fireball", "UFO" — qui se répètent par hasard)
+    c = df["comments"].fillna("")
+    doublons = c[(c != "") & (c.str.len() >= 40)].value_counts()
+    doublons = doublons[doublons > 1]
+    print(f"Témoignages recopiés à l'identique (≥40 caractères) : {doublons.sum()} lignes, {len(doublons)} textes")
+
+    groupe_final = df["groupe_evenement"].to_numpy().copy()
+    for texte in doublons.index:
+        positions = df.index.get_indexer(df.index[df["comments"] == texte])
+        gids = np.unique(groupe_final[positions])
+        cible = gids[0]
+        for g in gids[1:]:
+            groupe_final[groupe_final == g] = cible
+    df["groupe_final"] = groupe_final
+
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    idx_train_pos, idx_test_pos = next(gss.split(df, groups=df["groupe_final"]))
+    idx_train, idx_test = df.index[idx_train_pos], df.index[idx_test_pos]
+
+    avant = entrainer_et_evaluer(
+        df, COLONNES_CAT_HONNETES, COLONNES_NUM_HONNETES, None, decoupe=(idx_train_hier, idx_test_hier)
+    )
+    apres = entrainer_et_evaluer(
+        df, COLONNES_CAT_HONNETES, COLONNES_NUM_HONNETES, None, decoupe=(idx_train, idx_test)
+    )
+
+    print("Phase 4 (modèle honnête, sans comments) avant / après la découpe groupée :")
+    print(f"  Rappel    : {100 * avant[1]:.1f} → {100 * apres[1]:.1f} / 100")
+    print(f"  Précision : {100 * avant[2]:.1f} → {100 * apres[2]:.1f} / 100")
+
+    exemple = df[df["groupe_evenement"] == gid_max][["datetime", "city", "state", "shape", "canular"]]
+    print(f"\nExemple, un événement complet ({len(exemple)} témoins) :")
+    print(exemple.to_string())
+
+    return df, (idx_train, idx_test)
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -235,3 +334,4 @@ if __name__ == "__main__":
     df = phase4_premier_verdict(releves)
     avant, apres = phase5_le_conseil_ne_vous_croit_pas(df)
     phase6_le_modele_le_plus_bete(df, apres)
+    df, (idx_train, idx_test) = phase7_plusieurs_temoins_un_seul_evenement(df)
