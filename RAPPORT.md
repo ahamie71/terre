@@ -29,4 +29,13 @@ Aucune ligne supprimée, les valeurs qui résistent deviennent `None`.
   service de standardisation, pas le témoin.
 - date_posted : 0 échec.
 
+## Phase 3 : trier les canulars
+
+Règle : un relevé est un canular si le mot "hoax" apparaît dans comments.
+802 relevés marqués (0,90 % des 88 679).
+
+Limite : la plupart de ces mentions ("possible hoax??", 674 sur 802) sont des notes NUFORC pas
+sûres d'elles, pas des canulars confirmés. Et au moins une ligne dit littéralement "No Hoax" dans
+le commentaire — la règle l'attrape quand même à tort, elle ne gère pas la négation.
+
 

@@ -2,6 +2,7 @@
 
 import csv
 import os
+import re
 import urllib.request
 from datetime import datetime
 
@@ -113,7 +114,23 @@ def phase2_rien_nest_du_bon_type(lignes_valides):
     return releves
 
 
+def phase3_trier_les_canulars(releves):
+    print("\n=== Phase 3 : le Conseil veut trier les canulars ===")
+
+    for r in releves:
+        r["canular"] = bool(re.search(r"hoax", r["comments"], re.IGNORECASE))
+
+    nb_canulars = sum(r["canular"] for r in releves)
+    proportion = 100 * nb_canulars / len(releves)
+
+    print("Règle : un relevé est un canular si le mot 'hoax' apparaît dans comments.")
+    print(f"Canulars détectés : {nb_canulars} ({proportion:.2f} % de {len(releves)})")
+
+    return releves
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
     releves = phase2_rien_nest_du_bon_type(lignes_valides)
+    releves = phase3_trier_les_canulars(releves)
