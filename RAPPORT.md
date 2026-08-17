@@ -38,4 +38,15 @@ Limite : la plupart de ces mentions ("possible hoax??", 674 sur 802) sont des no
 sûres d'elles, pas des canulars confirmés. Et au moins une ligne dit littéralement "No Hoax" dans
 le commentaire — la règle l'attrape quand même à tort, elle ne gère pas la négation.
 
+## Phase 4 : le premier verdict
+
+Régression logistique (shape, state, country, duration_seconds, latitude, longitude, comments en
+TF-IDF). Évalué sur 17 736 relevés (20 % du jeu, jamais vus à l'entraînement).
+
+- Rappel : 99,4 / 100 canulars réellement présents attrapés
+- Précision : 98,8 / 100 signalés qui le sont vraiment
+
+C'est presque trop beau — logique, comments contient littéralement le mot "hoax" qui a servi à
+fabriquer l'étiquette en phase 3. À creuser en phase 5.
+
 

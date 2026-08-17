@@ -6,6 +6,15 @@ import re
 import urllib.request
 from datetime import datetime
 
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
 DATA_URL = (
     "https://raw.githubusercontent.com/planetsig/ufo-reports/master/"
     "csv-data/ufo-complete-geocoded-time-standardized.csv"
@@ -129,8 +138,64 @@ def phase3_trier_les_canulars(releves):
     return releves
 
 
+def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_state=42):
+    """Entraîne une régression logistique sur les colonnes données et rend
+    (nb de relevés de test, rappel, précision), calculés sur un jeu de test
+    jamais vu à l'entraînement."""
+    colonnes = colonnes_cat + colonnes_num + ([colonne_texte] if colonne_texte else [])
+    X = df[colonnes].copy()
+    for c in colonnes_num:
+        X[c] = X[c].fillna(X[c].median())
+    for c in colonnes_cat:
+        X[c] = X[c].fillna("inconnu")
+    if colonne_texte:
+        X[colonne_texte] = X[colonne_texte].fillna("")
+    y = df["canular"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=random_state, stratify=y
+    )
+
+    transformateurs = [("cat", OneHotEncoder(handle_unknown="ignore"), colonnes_cat)]
+    if colonne_texte:
+        transformateurs.append(
+            ("texte", TfidfVectorizer(max_features=3000, stop_words="english"), colonne_texte)
+        )
+
+    modele = Pipeline(
+        [
+            ("pretraitement", ColumnTransformer(transformateurs, remainder="passthrough")),
+            ("classifieur", LogisticRegression(max_iter=3000, class_weight="balanced")),
+        ]
+    )
+    modele.fit(X_train, y_train)
+    y_pred = modele.predict(X_test)
+
+    rappel = recall_score(y_test, y_pred, zero_division=0)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    return len(X_test), rappel, precision
+
+
+def phase4_premier_verdict(releves):
+    print("\n=== Phase 4 : le premier verdict ===")
+
+    df = pd.DataFrame(releves)
+    colonnes_cat = ["shape", "state", "country"]
+    colonnes_num = ["duration_seconds", "latitude", "longitude"]
+    colonne_texte = "comments"
+
+    n_test, rappel, precision = entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte)
+
+    print(f"Évalué sur {n_test} relevés jamais vus à l'entraînement (20 % du jeu, stratifié).")
+    print(f"Rappel    : {100 * rappel:.1f} / 100 canulars réellement présents attrapés")
+    print(f"Précision : {100 * precision:.1f} / 100 relevés signalés qui sont vraiment des canulars")
+
+    return df
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
     releves = phase2_rien_nest_du_bon_type(lignes_valides)
     releves = phase3_trier_les_canulars(releves)
+    df = phase4_premier_verdict(releves)
