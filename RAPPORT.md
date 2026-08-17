@@ -156,4 +156,29 @@ peut donc toujours distinguer un trou d'une vraie valeur et apprendre la corrél
 duration_hours_min n'est pas encore une feature ; même principe prévu quand elle sera traitée en
 phase 11.
 
+## Phase 10 : la chaîne de traitement du Bureau
+
+Jusqu'ici, `entrainer_et_evaluer` faisait `df[c].fillna(df[c].median())` sur tout le tableau
+*avant* de couper train/test — la médiane (et le remplissage catégoriel) voyait donc une miette du
+test. Nouveau `construire_pipeline` : tout ce qui s'apprend (médiane, catégories vues) est dans un
+`sklearn.Pipeline`, appris uniquement par `.fit(X_train, ...)`.
+
+Rappel / précision, découpe de la phase 8, avant → après :
+- Rappel : 51,9 → 53,3 / 100
+- Précision : 1,1 → 1,1 / 100
+
+Ça bouge à peine, et c'est cohérent : à ce stade il y a très peu de valeurs manquantes numériques
+(6 au total) et peu de catégories, donc la médiane "propre" et la médiane "sale" sont presque la
+même valeur. Le vrai risque de fuite grossira en phase 12 avec l'encodage des villes (une liste
+apprise depuis les données) — c'est pour ça qu'on corrige la mécanique maintenant, avant d'ajouter
+des features qui ont vraiment besoin d'être apprises sur l'apprentissage seul.
+
+Deuxième point : à 0,9 % de canulars une découpe malchanceuse pourrait donner un test presque vide
+en canulars. Déjà vérifié en phase 8 : apprentissage 0,94 %, test 0,76 %, aucun des deux n'est
+proche de zéro.
+
+Démonstration : un relevé inventé à la main (`shape=triangle, state=il, country=us,
+duration_seconds=300, latitude=41.57, longitude=-87.78`) traverse toute la chaîne en un seul appel
+`pipeline.predict(...)` et ressort avec une prédiction, sans retaper une étape à la main.
+
 

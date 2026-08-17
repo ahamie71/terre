@@ -10,11 +10,12 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 
 DATA_URL = (
     "https://raw.githubusercontent.com/planetsig/ufo-reports/master/"
@@ -405,6 +406,88 @@ def phase9_les_cases_vides(df):
     return df
 
 
+def _vide_en_nan(X):
+    return X.replace("", np.nan)
+
+
+def construire_pipeline(colonnes_cat, colonnes_num, colonne_texte):
+    """Pipeline complet : rien n'est appris (médiane, catégories, vocabulaire)
+    avant .fit(), donc rien n'est appris ailleurs que sur l'apprentissage."""
+    transformateurs = []
+    if colonnes_cat:
+        pipeline_cat = Pipeline(
+            [
+                ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+                ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
+                ("onehot", OneHotEncoder(handle_unknown="ignore")),
+            ]
+        )
+        transformateurs.append(("cat", pipeline_cat, colonnes_cat))
+    if colonnes_num:
+        transformateurs.append(("num", SimpleImputer(strategy="median"), colonnes_num))
+    if colonne_texte:
+        transformateurs.append(
+            ("texte", TfidfVectorizer(max_features=3000, stop_words="english"), colonne_texte)
+        )
+
+    return Pipeline(
+        [
+            ("pretraitement", ColumnTransformer(transformateurs, remainder="drop")),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
+        ]
+    )
+
+
+def entrainer_pipeline(df, colonnes_cat, colonnes_num, colonne_texte, idx_train, idx_test):
+    colonnes = colonnes_cat + colonnes_num + ([colonne_texte] if colonne_texte else [])
+    X = df[colonnes]
+    y = df["canular"]
+
+    pipeline = construire_pipeline(colonnes_cat, colonnes_num, colonne_texte)
+    pipeline.fit(X.loc[idx_train], y.loc[idx_train])
+    y_pred = pipeline.predict(X.loc[idx_test])
+
+    rappel = recall_score(y.loc[idx_test], y_pred, zero_division=0)
+    precision = precision_score(y.loc[idx_test], y_pred, zero_division=0)
+    exactitude = accuracy_score(y.loc[idx_test], y_pred)
+    return len(idx_test), rappel, precision, exactitude, pipeline
+
+
+def phase10_chaine_de_traitement(df, idx_train, idx_test):
+    print("\n=== Phase 10 : la chaîne de traitement du Bureau ===")
+
+    proportion_train = 100 * df.loc[idx_train, "canular"].mean()
+    proportion_test = 100 * df.loc[idx_test, "canular"].mean()
+    print(f"Proportion de canulars — apprentissage : {proportion_train:.2f} % | test : {proportion_test:.2f} %")
+    print("(déjà rendu en phase 8 : ni l'un ni l'autre n'est proche de 0, la découpe n'est pas dégénérée)")
+
+    avant = entrainer_et_evaluer(df, COLONNES_CAT_HONNETES, COLONNES_NUM_HONNETES, None, decoupe=(idx_train, idx_test))
+    _, rappel, precision, _, pipeline = entrainer_pipeline(
+        df, COLONNES_CAT_HONNETES, COLONNES_NUM_HONNETES, None, idx_train, idx_test
+    )
+
+    print("Rappel / précision, fillna manuel sur tout df → pipeline appris sur l'apprentissage seul :")
+    print(f"  Rappel    : {100 * avant[1]:.1f} → {100 * rappel:.1f} / 100")
+    print(f"  Précision : {100 * avant[2]:.1f} → {100 * precision:.1f} / 100")
+
+    nouveau = pd.DataFrame(
+        [
+            {
+                "shape": "triangle",
+                "state": "il",
+                "country": "us",
+                "duration_seconds": 300.0,
+                "latitude": 41.57,
+                "longitude": -87.78,
+            }
+        ]
+    )
+    prediction = pipeline.predict(nouveau)[0]
+    print(f"Relevé inventé à la main → chaîne complète en un seul appel → prédiction : {'canular' if prediction else 'pas canular'}")
+
+    return df, pipeline
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -416,3 +499,4 @@ if __name__ == "__main__":
     df, (idx_train, idx_test) = phase7_plusieurs_temoins_un_seul_evenement(df)
     df, (idx_train, idx_test) = phase8_ordre_des_choses(df)
     df = phase9_les_cases_vides(df)
+    df, pipeline = phase10_chaine_de_traitement(df, idx_train, idx_test)
