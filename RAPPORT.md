@@ -247,4 +247,130 @@ Le chiffre de la phase 4 (99,4/99,4) était une fuite de bout en bout. Le chiffr
 autour de 50/1 : on attrape environ un canular sur deux, au prix de beaucoup de fausses alertes —
 logique avec une cible fabriquée à partir d'un mot-clé dans un texte qu'on a retiré du modèle.
 
+# Défendre une décision
+
+## Phase 13 : la facture du Bureau
+
+Grille votée : 30 crédits par canular manqué, 2 par fausse alerte. Facture calculée sur la partie
+test pour chaque frontière de 0.00 à 1.00 (pas de 0,01).
+
+- Optimum strict : frontière 1.00 → 4 050 crédits. Ça revient à ne jamais rien signaler.
+- Meilleure frontière qui attrape encore au moins un vrai canular : **0.86 → 4 084 crédits** (3
+  canulars attrapés sur 135).
+- Frontière à 0.5 (le défaut de la bibliothèque) : 12 540 crédits.
+- Écart retenue vs 0.5 : **8 456 crédits économisés**.
+
+Je retiens 0.86, pas l'optimum strict à 1.00 : un système qui ne signale jamais rien n'est pas une
+décision qu'on peut présenter au Conseil, et l'écart de coût entre les deux (34 crédits sur toute
+la partie test) est dérisoire. Le vrai enseignement est ailleurs : avec la précision actuelle
+(~1 %), signaler quoi que ce soit coûte presque toujours plus cher en fausses alertes que ça ne
+rapporte en canulars attrapés. Le système n'est pas assez précis pour être rentable en l'état.
+
+## Phase 14 : une promesse à 80 %
+
+Dix tranches de probabilité, ~1770 relevés chacune. Avant calibration, la probabilité annoncée va
+de 9 % à 72 % selon la tranche — mais la proportion réelle de canulars reste plate entre 0,3 % et
+1,3 % partout. **Le système est trop confiant**, dans des proportions énormes : il dit 72 % là où
+la réalité est 1,2 %.
+
+Calibration isotonic apprise par validation croisée sur l'apprentissage (jamais sur le test).
+Après coup, la probabilité moyenne annoncée par tranche colle à la proportion réelle (ex. dernière
+tranche : 1,44 % annoncé contre 1,54 % observé), et l'ordre des tranches reste cohérent — le
+classement du modèle était bon, seul le chiffre affiché était fantaisiste.
+
+## Phase 15 : deux analystes, deux chiffres
+
+- Taille de la partie test : 17 735 — canulars réellement présents : **135**.
+- Rappel : 49,0 % [40,2 — 57,7] sur 1 000 rééchantillonnages (bootstrap, graine fixée).
+- Précision : 1,2 % [1,0 — 1,6].
+
+Réponse au Conseil : avec seulement 135 canulars dans le test, la fourchette du rappel fait à elle
+seule 18 points de large. 0,31 et 0,34 tiennent largement dans ce bruit — les deux systèmes ne sont
+pas distinguables sur ce chiffre, il faudrait un tout autre volume de test pour trancher.
+
+## Phase 16 : trois dossiers sur le bureau
+
+Frontière utilisée : 0,86 (phase 13).
+
+**Relevé #7715** (Oklahoma, 07/10/2013) — signalé à 100 % de confiance, **et c'est faux** (pas un
+canular). Ce qui bascule : `duree_s` à lui seul (contribution +10,46) — cette ligne a une durée de
+10 526 400 s (~4 mois). `duree_s` n'est pas standardisé dans le modèle : une durée extrême écrase
+tout le reste du calcul.
+
+**Relevé #75051** (Virginia Beach, 19/08/2013) — juste au-dessus de la frontière (0,860), et c'est
+aussi une fausse alerte. `shape=egg` pousse fort vers canular, mais rien ne le confirme ailleurs.
+
+**Relevé #27841** (Greenwood, 07/01/2013) — canular laissé passer (proba 0,856, sous la frontière
+de peu). Même `shape=egg` que le cas précédent, mais `country=us` tire vers le bas et le fait
+passer sous 0,86 — à un cheveu près.
+
+Importance globale (mélanger une colonne, regarder la chute du rappel de base 48,9) :
+
+| Colonne | Chute de rappel |
+|---|---|
+| shape | +11,3 pts |
+| datetime | +7,0 pts |
+| state | +6,7 pts |
+| country | +5,5 pts |
+| city | +4,0 pts |
+| duree_s | +0,0 pt |
+| longitude | +0,0 pt |
+| latitude | -0,4 pt |
+
+Colonne surprenante : **duree_s**, avant-dernière au classement global — alors qu'elle décide à
+elle seule le dossier #7715 ci-dessus. Explication : son poids n'existe que pour une poignée de
+durées extrêmes (des mois entiers), invisible en moyenne sur l'ensemble du test. Une explication
+de dossier et une explication d'ensemble ne racontent donc pas la même histoire, exactement comme
+prévenu — ici, c'est aussi un défaut de méthode (`duree_s` mériterait d'être mise à l'échelle).
+
+## Phase 17 : l'angle mort du Bureau
+
+79,3 % des relevés viennent des États-Unis.
+
+| Zone | n (test) | % canular | Rappel | Précision |
+|---|---|---|---|---|
+| us | 15 108 | 0,68 % | 0 % | 0 % |
+| inconnu | 1 818 | 1,10 % | 0 % | 0 % |
+| ca | 566 | 0,71 % | 0 % | 0 % |
+| gb | 159 | 3,77 % | 50 % | 75 % |
+| au | 69 | 1,45 % | 0 % | 0 % |
+| de | 15 | 6,67 % | 0 % | 0 % |
+
+Les trois seuls canulars attrapés dans tout le test sont **tous les trois au Royaume-Uni**. Le taux
+de canulars réel est 5 à 10 fois plus élevé hors des États-Unis (jusqu'à 6,67 % en Allemagne contre
+0,68 % aux USA) — mais chaque zone hors US pèse entre 15 et 566 relevés en test, bien trop peu
+(phase 15) pour en tirer une frontière fiable propre à chaque zone.
+
+Décision : une seule frontière pour tout le monde, faute de volume suffisant ailleurs qu'aux USA.
+Mais le taux de canulars nettement plus élevé hors US mérite d'être creusé — soit le Bureau y est
+vraiment plus la cible de canulars, soit les habitudes d'annotation NUFORC diffèrent aussi par
+pays (même limite qu'en phase 8, mais sur la géographie plutôt que le temps).
+
+## Phase 18 : la transmission d'archive
+
+![Proportion de canulars par année](graphique_canulars_par_annee.png)
+
+La courbe confirme et précise la phase 8 : quasi plate et basse jusqu'en 2004 (~0,1-0,4 %), montée
+brutale 2005-2008 (jusqu'à 2,64 %), rechute 2012-2013 (~0,6 %), puis remontée en 2014. Ce n'est pas
+un phénomène qui évolue doucement, ce sont des marches — cohérent avec des habitudes d'annotation
+du Bureau qui changent par à-coups, pas avec une réalité du monde qui dérive en douceur.
+
+Épreuve (entraînement sur l'ancien, test sur le récent — même découpe que la phase 8) :
+- Phase 8 (sans ville/heure) : rappel 51,9 — précision 1,1
+- Phase 12 (modèle final) : rappel 48,9 — précision 1,2
+
+Les deux modèles tiennent à peu près pareil sur cette découpe ancien→récent : pas d'effondrement
+franc, mais les deux nombres restent dans la même zone flottante que la phase 15.
+
+**Surveillance sans connaître la vérité** (la réponse "canular ou pas" arrive des semaines plus
+tard, ou jamais) :
+1. Taux de signalement du système (% de relevés marqués canular) par semaine.
+2. Probabilité moyenne annoncée par semaine, après calibration (phase 14).
+3. Taux de country/state manquants par semaine — une dérive des données en entrée précède souvent
+   une dérive du modèle.
+
+Fréquence : hebdomadaire. Seuil d'alerte : écart de plus de 3 points de pourcentage vs la moyenne
+des 8 semaines précédentes sur l'indicateur 1 ou 3 → on rappelle les analystes. Aucun des trois
+n'a besoin de savoir si un relevé était vraiment un canular.
+
 

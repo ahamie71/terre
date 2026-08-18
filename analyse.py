@@ -4,19 +4,24 @@ import csv
 import os
 import re
 import urllib.request
+import warnings
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 DATA_URL = (
     "https://raw.githubusercontent.com/planetsig/ufo-reports/master/"
@@ -181,7 +186,7 @@ def entrainer_et_evaluer(df, colonnes_cat, colonnes_num, colonne_texte, random_s
     modele = Pipeline(
         [
             ("pretraitement", ColumnTransformer(transformateurs, remainder="passthrough")),
-            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced", random_state=42)),
         ]
     )
     modele.fit(X_train, y_train)
@@ -418,7 +423,7 @@ def construire_pipeline(colonnes_cat, colonnes_num, colonne_texte):
     if colonnes_cat:
         pipeline_cat = Pipeline(
             [
-                ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+                ("vide_en_nan", FunctionTransformer(_vide_en_nan, feature_names_out="one-to-one")),
                 ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
                 ("onehot", OneHotEncoder(handle_unknown="ignore")),
             ]
@@ -434,7 +439,7 @@ def construire_pipeline(colonnes_cat, colonnes_num, colonne_texte):
     return Pipeline(
         [
             ("pretraitement", ColumnTransformer(transformateurs, remainder="drop")),
-            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced", random_state=42)),
         ]
     )
 
@@ -625,6 +630,9 @@ class RegroupeurVillesRares(BaseEstimator, TransformerMixin):
         s = s.where(s.isin(self.villes_frequentes_), "autre")
         return s.to_numpy().reshape(-1, 1)
 
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(input_features if input_features is not None else ["city"])
+
 
 class EncodeurHeureCyclique(BaseEstimator, TransformerMixin):
     """23h et 0h sont voisines dans le ciel ; sin/cos le disent au modèle,
@@ -637,6 +645,9 @@ class EncodeurHeureCyclique(BaseEstimator, TransformerMixin):
         heures = pd.to_datetime(pd.Series(np.ravel(X))).dt.hour.to_numpy()
         radians = 2 * np.pi * heures / 24
         return np.column_stack([np.sin(radians), np.cos(radians)])
+
+    def get_feature_names_out(self, input_features=None):
+        return np.array(["heure_sin", "heure_cos"])
 
 
 FUSIONS_FORMES = {"changed": "changing", "round": "circle"}
@@ -657,15 +668,15 @@ def construire_pipeline_v2(seuil_villes=20):
     )
     pipeline_forme = Pipeline(
         [
-            ("fusion", FunctionTransformer(_fusionner_formes)),
-            ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+            ("fusion", FunctionTransformer(_fusionner_formes, feature_names_out="one-to-one")),
+            ("vide_en_nan", FunctionTransformer(_vide_en_nan, feature_names_out="one-to-one")),
             ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
             ("onehot", OneHotEncoder(handle_unknown="ignore")),
         ]
     )
     pipeline_cat = Pipeline(
         [
-            ("vide_en_nan", FunctionTransformer(_vide_en_nan)),
+            ("vide_en_nan", FunctionTransformer(_vide_en_nan, feature_names_out="one-to-one")),
             ("imputer", SimpleImputer(strategy="constant", fill_value="inconnu")),
             ("onehot", OneHotEncoder(handle_unknown="ignore")),
         ]
@@ -684,7 +695,7 @@ def construire_pipeline_v2(seuil_villes=20):
     return Pipeline(
         [
             ("pretraitement", pretraitement),
-            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced")),
+            ("classifieur", LogisticRegression(max_iter=5000, class_weight="balanced", random_state=42)),
         ]
     )
 
@@ -731,6 +742,266 @@ def phase12_la_ville_et_lheure(df, idx_train, idx_test):
     return df, pipeline_v2
 
 
+COLONNES_MODELE = ["city", "shape", "state", "country", "datetime", "duree_s", "latitude", "longitude"]
+
+COUT_CANULAR_MANQUE = 30  # faux négatif : une équipe part travailler sur du vent
+COUT_FAUSSE_ALERTE = 2  # faux positif : le Bureau perd une observation potentiellement utile
+
+
+def facture(y_vrai, y_predit):
+    y_vrai = np.asarray(y_vrai)
+    y_predit = np.asarray(y_predit)
+    faux_negatifs = int((y_vrai & ~y_predit).sum())
+    faux_positifs = int((~y_vrai & y_predit).sum())
+    return faux_negatifs * COUT_CANULAR_MANQUE + faux_positifs * COUT_FAUSSE_ALERTE
+
+
+def phase13_la_facture_du_bureau(df, pipeline, idx_train, idx_test):
+    print("\n=== Phase 13 : la facture du Bureau ===")
+
+    probas = pipeline.predict_proba(df.loc[idx_test, COLONNES_MODELE])[:, 1]
+    y_test = df.loc[idx_test, "canular"].to_numpy()
+
+    seuils = np.round(np.arange(0.0, 1.001, 0.01), 2)
+    factures = np.array([facture(y_test, probas >= s) for s in seuils])
+
+    print("Facture selon la frontière (extrait tous les 0,05) :")
+    for s, f in zip(seuils, factures):
+        if round(s * 100) % 5 == 0:
+            print(f"  {s:.2f} : {f} crédits")
+
+    i_min = int(np.argmin(factures))
+    seuil_optimal = float(seuils[i_min])
+    facture_optimale = int(factures[i_min])
+    facture_050 = int(factures[np.where(seuils == 0.5)[0][0]])
+
+    vrais_positifs = np.array([(y_test & (probas >= s)).sum() for s in seuils])
+    utiles = np.where(vrais_positifs > 0)[0]
+    i_utile = utiles[np.argmin(factures[utiles])]
+    seuil_utile = float(seuils[i_utile])
+    facture_utile = int(factures[i_utile])
+
+    print(f"\nOptimum strict : {seuil_optimal:.2f} → {facture_optimale} crédits", end="")
+    if vrais_positifs[i_min] == 0:
+        print(" (ça revient à ne jamais rien signaler)")
+    else:
+        print()
+    print(
+        f"Meilleure frontière qui attrape encore au moins un vrai canular : "
+        f"{seuil_utile:.2f} → {facture_utile} crédits ({vrais_positifs[i_utile]} canulars attrapés)"
+    )
+    print(f"Frontière à 0.5 : {facture_050} crédits")
+    print(f"Écart (retenue vs 0.5) : {facture_050 - facture_utile} crédits économisés")
+    if vrais_positifs[i_min] == 0:
+        print(
+            "Retenue : la frontière utile, pas l'optimum strict — un système qui n'attrape jamais "
+            "rien n'est pas une décision qu'on peut défendre, et l'écart de coût entre les deux "
+            "est faible (quelques dizaines de crédits sur toute la partie test)."
+        )
+
+    return seuil_utile
+
+
+def phase14_promesse_a_80_pourcent(df, pipeline, idx_train, idx_test):
+    print("\n=== Phase 14 : une promesse à 80 % ===")
+
+    X_train = df.loc[idx_train, COLONNES_MODELE]
+    y_train = df.loc[idx_train, "canular"]
+    X_test = df.loc[idx_test, COLONNES_MODELE]
+    y_test = df.loc[idx_test, "canular"].to_numpy()
+
+    def table_tranches(probas):
+        tranches = pd.qcut(probas, 10, duplicates="drop")
+        t = pd.DataFrame({"tranche": tranches, "proba": probas, "reel": y_test})
+        return t.groupby("tranche", observed=True).agg(
+            n=("reel", "size"), proba_annoncee=("proba", "mean"), proportion_reelle=("reel", "mean")
+        )
+
+    probas_brutes = pipeline.predict_proba(X_test)[:, 1]
+    table_avant = table_tranches(probas_brutes)
+    print("Avant calibration :")
+    print(table_avant.to_string())
+
+    sens = "trop confiant" if (table_avant["proba_annoncee"] > table_avant["proportion_reelle"]).all() else "trop prudent"
+    print(f"\nLe système est {sens} : la probabilité annoncée dépasse largement ce qui se produit vraiment.")
+
+    calibreur = CalibratedClassifierCV(construire_pipeline_v2(seuil_villes=20), method="isotonic", cv=3)
+    calibreur.fit(X_train, y_train)
+    probas_calibrees = calibreur.predict_proba(X_test)[:, 1]
+    table_apres = table_tranches(probas_calibrees)
+    print("\nAprès calibration (isotonic, apprise par validation croisée sur l'apprentissage) :")
+    print(table_apres.to_string())
+
+    return calibreur
+
+
+def phase15_deux_analystes_deux_chiffres(df, pipeline, idx_test, n_reechantillons=1000):
+    print("\n=== Phase 15 : deux analystes, deux chiffres ===")
+
+    y_test = df.loc[idx_test, "canular"].to_numpy()
+    y_pred = pipeline.predict(df.loc[idx_test, COLONNES_MODELE])
+    n_canulars = int(y_test.sum())
+
+    rng = np.random.default_rng(42)
+    n = len(y_test)
+    rappels, precisions = [], []
+    for _ in range(n_reechantillons):
+        tirage = rng.integers(0, n, n)
+        rappels.append(recall_score(y_test[tirage], y_pred[tirage], zero_division=0))
+        precisions.append(precision_score(y_test[tirage], y_pred[tirage], zero_division=0))
+    rappels, precisions = np.array(rappels), np.array(precisions)
+
+    r_bas, r_haut = np.percentile(rappels, [2.5, 97.5]) * 100
+    p_bas, p_haut = np.percentile(precisions, [2.5, 97.5]) * 100
+
+    print(f"Taille de la partie test : {n}")
+    print(f"Canulars réellement présents dans le test : {n_canulars}")
+    print(f"Rappel    : {100 * rappels.mean():.1f} % [{r_bas:.1f} — {r_haut:.1f}] sur {n_reechantillons} rééchantillonnages")
+    print(f"Précision : {100 * precisions.mean():.1f} % [{p_bas:.1f} — {p_haut:.1f}]")
+    print(
+        f"Réponse au Conseil : avec seulement {n_canulars} canulars dans le test, la fourchette "
+        f"du rappel fait à elle seule {r_haut - r_bas:.0f} points — 0,31 et 0,34 tiennent "
+        f"largement dans ce bruit, les deux systèmes ne sont pas distinguables sur ce chiffre."
+    )
+
+    return rappels, precisions
+
+
+def expliquer_ligne(pipeline, ligne_df, top=5):
+    pretraitement = pipeline.named_steps["pretraitement"]
+    clf = pipeline.named_steps["classifieur"]
+    X_transforme = pretraitement.transform(ligne_df)
+    if hasattr(X_transforme, "toarray"):
+        X_transforme = X_transforme.toarray()
+    noms = pretraitement.get_feature_names_out()
+    contributions = X_transforme[0] * clf.coef_[0]
+    ordre = np.argsort(-np.abs(contributions))
+    resultat = [(noms[i].replace("__", " : "), contributions[i]) for i in ordre if abs(contributions[i]) > 1e-9]
+    return resultat[:top]
+
+
+def importance_permutation(pipeline, X_test, y_test, colonnes, n_repets=5, seed=42):
+    rng = np.random.default_rng(seed)
+    base = recall_score(y_test, pipeline.predict(X_test), zero_division=0)
+    baisses = {}
+    for col in colonnes:
+        chutes = []
+        for _ in range(n_repets):
+            X_permute = X_test.copy()
+            X_permute[col] = rng.permutation(X_permute[col].to_numpy())
+            score = recall_score(y_test, pipeline.predict(X_permute), zero_division=0)
+            chutes.append(base - score)
+        baisses[col] = float(np.mean(chutes))
+    return base, baisses
+
+
+def phase16_trois_dossiers_sur_le_bureau(df, pipeline, idx_test, seuil):
+    print("\n=== Phase 16 : trois dossiers sur le bureau ===")
+
+    X_test = df.loc[idx_test, COLONNES_MODELE]
+    y_test = df.loc[idx_test, "canular"]
+    probas = pd.Series(pipeline.predict_proba(X_test)[:, 1], index=idx_test)
+    signales = probas >= seuil
+
+    idx_confiant = probas.idxmax()
+    au_dessus = probas[signales]
+    idx_limite = (au_dessus - seuil).idxmin() if len(au_dessus) else idx_confiant
+    faux_negatifs = probas[y_test.astype(bool) & ~signales]
+    idx_manque = faux_negatifs.idxmax() if len(faux_negatifs) else probas.index[0]
+
+    for nom, idx in [
+        ("Signalé avec forte confiance", idx_confiant),
+        ("Tout juste au-dessus de la frontière", idx_limite),
+        ("Canular laissé passer", idx_manque),
+    ]:
+        ligne = df.loc[[idx], COLONNES_MODELE]
+        print(f"\n{nom} — relevé #{idx} ({df.loc[idx,'city']}, {df.loc[idx,'datetime']}) :")
+        print(f"  Probabilité annoncée : {probas[idx]:.3f} — vraiment canular : {bool(y_test[idx])}")
+        for feature, contrib in expliquer_ligne(pipeline, ligne):
+            signe = "pousse vers canular" if contrib > 0 else "pousse vers pas-canular"
+            print(f"    {feature} : {contrib:+.2f} ({signe})")
+
+    base, baisses = importance_permutation(pipeline, X_test, y_test, COLONNES_MODELE)
+    classement = sorted(baisses.items(), key=lambda kv: -kv[1])
+    print(f"\nImportance globale (rappel de base {100*base:.1f}, chute en mélangeant chaque colonne) :")
+    for col, chute in classement:
+        print(f"  {col} : {100*chute:+.2f} points de rappel")
+
+    return classement
+
+
+def phase17_langle_mort_du_bureau(df, pipeline, idx_test, seuil):
+    print("\n=== Phase 17 : l'angle mort du Bureau ===")
+
+    proportion_us = 100 * (df["country"] == "us").mean()
+    print(f"Relevés venant des États-Unis : {proportion_us:.1f} %")
+
+    X_test = df.loc[idx_test, COLONNES_MODELE]
+    y_test = df.loc[idx_test, "canular"]
+    y_pred = pd.Series(pipeline.predict_proba(X_test)[:, 1] >= seuil, index=idx_test)
+    zones = df.loc[idx_test, "country"].replace("", "inconnu")
+
+    print(f"\n{'zone':12} {'n':>7} {'% canular':>10} {'rappel':>8} {'précision':>10}")
+    for zone, n in zones.value_counts().items():
+        m = (zones == zone).to_numpy()
+        r = recall_score(y_test[m], y_pred[m], zero_division=0)
+        p = precision_score(y_test[m], y_pred[m], zero_division=0)
+        prop = 100 * y_test[m].mean()
+        print(f"{zone:12} {n:>7} {prop:>9.2f}% {100*r:>7.1f}% {100*p:>9.1f}%")
+
+    print(
+        "\nDécision : une seule frontière pour tout le monde. Les zones hors US pèsent chacune "
+        "quelques centaines à quelques milliers de relevés en test — d'après la phase 15, ça ne "
+        "suffit pas pour caler une frontière séparée et fiable par zone."
+    )
+
+
+def phase18_la_transmission_darchive(df, pipeline, idx_train, idx_test):
+    print("\n=== Phase 18 : la transmission d'archive ===")
+
+    df["annee"] = df["datetime"].dt.year
+    par_annee = df[df["annee"] >= 1990].groupby("annee")["canular"].agg(["mean", "size"])
+    par_annee["proportion"] = 100 * par_annee["mean"]
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(par_annee.index, par_annee["proportion"], marker="o")
+    ax.set_xlabel("Année")
+    ax.set_ylabel("% de canulars")
+    ax.set_title("Proportion de canulars par année (1990+, avant 1990 trop peu de relevés/an)")
+    fig.tight_layout()
+    fig.savefig("graphique_canulars_par_annee.png", dpi=120)
+    plt.close(fig)
+    print("Graphique enregistré : graphique_canulars_par_annee.png")
+    print(par_annee[["size", "proportion"]].round(2).to_string())
+
+    _, rappel_p8, precision_p8, _ = entrainer_et_evaluer(
+        df, COLONNES_CAT_HONNETES, ["duration_seconds", "latitude", "longitude"], None, decoupe=(idx_train, idx_test)
+    )
+    y_test = df.loc[idx_test, "canular"]
+    y_pred = pipeline.predict(df.loc[idx_test, COLONNES_MODELE])
+    rappel_p12 = recall_score(y_test, y_pred, zero_division=0)
+    precision_p12 = precision_score(y_test, y_pred, zero_division=0)
+
+    print("\nÉpreuve (entraînement sur l'ancien, test sur le récent — même découpe que la phase 8) :")
+    print(f"  Phase 8  (sans ville/heure) : rappel {100*rappel_p8:.1f} — précision {100*precision_p8:.1f}")
+    print(f"  Phase 12 (modèle final)     : rappel {100*rappel_p12:.1f} — précision {100*precision_p12:.1f}")
+
+    print(
+        "\nSurveillance sans connaître la vérité :\n"
+        "  1. Taux de signalement (% de relevés marqués canular par semaine).\n"
+        "  2. Probabilité moyenne annoncée par semaine (après calibration, phase 14).\n"
+        "  3. Taux de country/state manquants par semaine (dérive des données en entrée).\n"
+        "Fréquence : hebdomadaire.\n"
+        "Seuil d'alerte : écart de plus de 3 points de pourcentage vs la moyenne des 8 semaines "
+        "précédentes sur l'indicateur 1 ou 3 → on rappelle les analystes."
+    )
+
+
 if __name__ == "__main__":
     telecharger_donnees()
     lignes_valides, lignes_ecartees = phase1_ouvrir_la_caisse()
@@ -745,3 +1016,9 @@ if __name__ == "__main__":
     df, pipeline = phase10_chaine_de_traitement(df, idx_train, idx_test)
     df = phase11_combien_de_temps_ca_a_dure(df, idx_train, idx_test)
     df, pipeline = phase12_la_ville_et_lheure(df, idx_train, idx_test)
+    seuil = phase13_la_facture_du_bureau(df, pipeline, idx_train, idx_test)
+    calibreur = phase14_promesse_a_80_pourcent(df, pipeline, idx_train, idx_test)
+    phase15_deux_analystes_deux_chiffres(df, pipeline, idx_test)
+    phase16_trois_dossiers_sur_le_bureau(df, pipeline, idx_test, seuil)
+    phase17_langle_mort_du_bureau(df, pipeline, idx_test, seuil)
+    phase18_la_transmission_darchive(df, pipeline, idx_train, idx_test)
